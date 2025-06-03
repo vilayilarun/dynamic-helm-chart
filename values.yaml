@@ -1,0 +1,281 @@
+# values.yaml
+
+applications:
+  - name: app1
+    enabled: true
+    namespace: default
+    kind: Deployment
+    createServiceAccount: true
+    serviceAccountName: app1-sa
+    replicaCount: 2
+    strategy:
+      type: RollingUpdate
+      rollingUpdate:
+        maxSurge: 1
+        maxUnavailable: 0
+    terminationGracePeriodSeconds: 30
+    hostAliases:
+      - ip: ""
+    image:
+      repository: myrepo/app1
+      tag: v1
+      pullPolicy: IfNotPresent
+    imagePullSecrets:
+      - name: regcred
+    podSecurityContext:
+      runAsUser: 1000
+      runAsGroup: 3000
+      fsGroup: 2000
+    containerSecurityContext:
+      allowPrivilegeEscalation: false
+      runAsNonRoot: true
+      capabilities:
+        drop: ["ALL"]
+    resources:
+      limits:
+        cpu: "500m"
+        memory: "256Mi"
+      requests:
+        cpu: "250m"
+        memory: "128Mi"
+    service:
+      enabled: true
+      type: LoadBalancer
+      loadBalancerIP: 10.0.0.5
+      externalTrafficPolicy: Local
+      annotations:
+        service.beta.kubernetes.io/aws-load-balancer-backend-protocol: http
+        service.beta.kubernetes.io/aws-load-balancer-ssl-cert: arn:aws:acm:...
+      ports:
+        - name: http
+          port: 80
+          targetPort: 8080
+          protocol: TCP
+    secrets:
+      createNew:
+        - name: my-secret
+          data:
+            username: admin
+            password: password
+      useExisting:
+        - global-secret
+    configmaps:
+      enabled: true
+      createNew:
+        - name: my-config
+          data:
+            LOG_LEVEL: debug
+            APP_ENV: production
+      useExisting:
+        - global-config
+    pvc:
+      createNew:
+        - name: data-vol
+          size: 1Gi
+          accessModes: [ReadWriteOnce]
+          storageClassName: standard
+      useExisting:
+        - existing-pvc
+    volumes:
+      - name: data-vol
+        persistentVolumeClaim:
+          claimName: data-vol
+      - name: existing-pvc
+        persistentVolumeClaim:
+          claimName: existing-pvc
+    volumeMounts:
+      - name: data-vol
+        mountPath: /app/data
+      - name: existing-pvc
+        mountPath: /app/existing-data
+    annotations:
+      prometheus.io/scrape: "true"
+      prometheus.io/port: "8080"
+    affinity:
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchLabels:
+                app: app1
+            topologyKey: kubernetes.io/hostname
+    tolerations:
+      - key: "node-role.kubernetes.io/worker"
+        operator: "Exists"
+        effect: "NoSchedule"
+    nodeSelector:
+      disktype: ssd
+    initContainers:
+      - name: init-db
+        image: busybox:latest
+        command: ["sh", "-c", "echo Initializing database && sleep 5"]
+    livenessProbe:
+      enabled: true
+      httpGet:
+        path: /health
+        port: 8080
+      initialDelaySeconds: 15
+      periodSeconds: 10
+    readinessProbe:
+      enabled: true
+      httpGet:
+        path: /ready
+        port: 8080
+      initialDelaySeconds: 5
+      periodSeconds: 5
+    ingress:
+      enabled: true
+      annotations:
+        nginx.ingress.kubernetes.io/rewrite-target: /
+      hosts:
+        - name: app1.example.com
+          paths:
+            - path: /
+              pathType: Prefix
+              backend:
+                service:
+                  name: app1
+                  port:
+                    number: 80
+        - name: app1.alt-domain.com
+          paths:
+            - path: /alt
+              pathType: Prefix
+              backend:
+                service:
+                  name: app1
+                  port:
+                    number: 8080
+      tls:
+        - hosts:
+            - app1.example.com
+            - app1.alt-domain.com
+          secretName: app1-tls-secret
+    transportServer:
+      enabled: true
+      protocol: TLS
+      host: tcp.myapp.com
+      secret: tls-secret
+      port: 9000
+      targetPort: 9000
+      upstreams:
+        - name: myapp-upstream
+          service: myapp-service
+          port: 9000
+    autoscaling:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 10
+      metrics:
+        - type: Resource
+          resource:
+            name: cpu
+            target:
+              type: Utilization
+              averageUtilization: 75
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 60
+          policies:
+            - type: Percent
+              value: 100
+              periodSeconds: 15
+    pdb:
+      minAvailable: 1
+
+  - name: logs-daemon
+    enabled: true
+    namespace: default
+    kind: DaemonSet
+    createServiceAccount: true
+    serviceAccountName: logs-daemon-sa
+    image:
+      repository: myrepo/logs
+      tag: latest
+      pullPolicy: Always
+    imagePullSecrets:
+      - name: regcred
+    podSecurityContext:
+      runAsUser: 2000
+      runAsGroup: 2000
+      fsGroup: 2000
+    containerSecurityContext:
+      allowPrivilegeEscalation: false
+      runAsNonRoot: true
+      capabilities:
+        drop: ["ALL"]
+    resources:
+      limits:
+        cpu: "200m"
+        memory: "128Mi"
+      requests:
+        cpu: "100m"
+        memory: "64Mi"
+    service:
+      enabled: false
+    secrets:
+      createNew: []
+      useExisting:
+        - log-secret
+    configmaps:
+      createNew: []
+      useExisting:
+        - log-config
+    pvc:
+      createNew: []
+      useExisting: []
+    volumes: []
+    volumeMounts: []
+    annotations: {}
+    affinity: {}
+    tolerations: []
+    nodeSelector: {}
+    initContainers: []
+    livenessProbe:
+      enabled: false
+    readinessProbe:
+      enabled: false
+    ingress:
+      enabled: false
+    transportServer:
+      enabled: true
+      protocol: UDP
+      port: 514
+      targetPort: 514
+      upstreams:
+        - name: logs-upstream
+          service: logs-daemon
+          port: 514
+  - name: cleanup-job
+    enabled: true
+    kind: Job
+    namespace: tools
+    image:
+      repository: alpine
+      tag: latest
+    restartPolicy: Never
+    resources:
+      limits:
+        memory: "128Mi"
+        cpu: "250m"
+      requests:
+        memory: "64Mi"
+        cpu: "100m"
+
+  - name: backup-cron
+    enabled: true
+    kind: CronJob
+    namespace: tools
+    image:
+      repository: busybox
+      tag: latest
+    schedule: "0 */6 * * *"
+    restartPolicy: OnFailure
+    resources:
+      limits:
+        memory: "128Mi"
+        cpu: "250m"
+      requests:
+        memory: "64Mi"
+        cpu: "100m"
